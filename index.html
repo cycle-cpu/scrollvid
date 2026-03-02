@@ -356,6 +356,7 @@
 
     .video-card-source.youtube { color: #ff4444; background: rgba(255, 68, 68, 0.1); }
     .video-card-source.twitter { color: var(--accent-2); background: rgba(5, 217, 232, 0.1); }
+    .video-card-source.reddit { color: #ff4500; background: rgba(255, 69, 0, 0.1); }
     .video-card-source.upload { color: var(--accent); background: rgba(255, 42, 109, 0.1); }
 
     .video-card-delete {
@@ -569,6 +570,7 @@
     .link-detect.visible { opacity: 1; }
     .link-detect.youtube { color: #ff4444; background: rgba(255, 68, 68, 0.12); }
     .link-detect.twitter { color: var(--accent-2); background: rgba(5, 217, 232, 0.12); }
+    .link-detect.reddit { color: #ff4500; background: rgba(255, 69, 0, 0.12); }
     .link-detect.direct { color: var(--accent-3); background: rgba(211, 0, 197, 0.12); }
 
     .link-preview {
@@ -1160,9 +1162,27 @@
         if (m) return { type: 'youtube', id: m[1], url, title: 'YouTube Video' };
       }
 
-      // Twitter / X
+      // Twitter / X — normalize x.com to twitter.com for embed compatibility
       const twMatch = url.match(/(?:twitter\.com|x\.com)\/(\w+)\/status\/(\d+)/);
-      if (twMatch) return { type: 'twitter', id: twMatch[2], user: twMatch[1], url, title: `@${twMatch[1]}` };
+      if (twMatch) {
+        // Build canonical twitter URL for twitframe
+        const canonicalUrl = `https://twitter.com/${twMatch[1]}/status/${twMatch[2]}`;
+        return { type: 'twitter', id: twMatch[2], user: twMatch[1], url: canonicalUrl, originalUrl: url, title: `@${twMatch[1]}` };
+      }
+
+      // Reddit — post URLs, video URLs, short links
+      const redditPost = url.match(/(?:(?:www|old|new)\.)?reddit\.com\/(r\/\w+\/comments\/\w+(?:\/[^/?#]*)?)/);
+      if (redditPost) {
+        return { type: 'reddit', path: redditPost[1], url, title: 'Reddit Video' };
+      }
+      // v.redd.it short video links
+      if (/v\.redd\.it\/\w+/i.test(url)) {
+        return { type: 'reddit', path: null, url, title: 'Reddit Video' };
+      }
+      // reddit.com/shorts or other reddit link patterns
+      if (/reddit\.com/i.test(url)) {
+        return { type: 'reddit', path: null, url, title: 'Reddit Video' };
+      }
 
       // Direct video URL
       if (/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(url)) {
@@ -1220,6 +1240,7 @@
       video: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
       youtube: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1c.3-1.9.5-3.8.5-5.8a31.4 31.4 0 0 0-.5-5.8zM9.6 15.6V8.4L15.8 12 9.6 15.6z"/></svg>',
       twitter: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>',
+      reddit: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z"/></svg>',
     };
 
     // ====================================================
@@ -1352,8 +1373,8 @@
           } else if (v.source === 'youtube') {
             thumbHtml = `<img src="https://img.youtube.com/vi/${v.sourceId}/mqdefault.jpg" alt="" loading="lazy">`;
           } else {
-            const icon = v.source === 'twitter' ? ICONS.twitter : ICONS.video;
-            const label = v.source === 'twitter' ? 'X / TWITTER' : v.source === 'youtube' ? 'YOUTUBE' : 'VIDEO';
+            const icon = v.source === 'twitter' ? ICONS.twitter : v.source === 'reddit' ? ICONS.reddit : ICONS.video;
+            const label = v.source === 'twitter' ? 'X / TWITTER' : v.source === 'reddit' ? 'REDDIT' : v.source === 'youtube' ? 'YOUTUBE' : 'VIDEO';
             thumbHtml = `<div class="placeholder-thumb">${icon}<span class="source-badge">${label}</span></div>`;
           }
 
@@ -1466,7 +1487,8 @@
         const parsed = parseVideoUrl(url);
         this.parsedLink = parsed;
 
-        detect.textContent = parsed.type === 'youtube' ? 'YouTube' : parsed.type === 'twitter' ? 'X / Twitter' : 'Video';
+        const typeLabels = { youtube: 'YouTube', twitter: 'X / Twitter', reddit: 'Reddit', direct: 'Video' };
+        detect.textContent = typeLabels[parsed.type] || 'Video';
         detect.className = `link-detect visible ${parsed.type}`;
 
         // Preview
@@ -1479,6 +1501,12 @@
           this.dom.linkPreviewThumb.innerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--card)">${ICONS.twitter}</div>`;
           this.dom.linkPreviewThumb.querySelector('svg').style.cssText = 'width:28px;height:28px;color:var(--accent-2)';
           this.dom.linkPreviewTitle.textContent = `Post by @${parsed.user}`;
+          this.dom.linkPreviewUrl.textContent = url;
+          preview.classList.add('visible');
+        } else if (parsed.type === 'reddit') {
+          this.dom.linkPreviewThumb.innerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--card)">${ICONS.reddit}</div>`;
+          this.dom.linkPreviewThumb.querySelector('svg').style.cssText = 'width:28px;height:28px;color:#ff4500';
+          this.dom.linkPreviewTitle.textContent = 'Reddit Video';
           this.dom.linkPreviewUrl.textContent = url;
           preview.classList.add('visible');
         } else {
@@ -1499,6 +1527,7 @@
           source: p.type,
           sourceId: p.id || null,
           url: p.url,
+          path: p.path || null,
           blob: null,
           thumbnail: null,
           createdAt: Date.now(),
@@ -1601,14 +1630,69 @@
             wrapper.appendChild(iframe);
             item.appendChild(wrapper);
 
-          } else if (v.source === 'twitter' && v.sourceId) {
+          } else if (v.source === 'twitter') {
             const wrapper = document.createElement('div');
             wrapper.className = 'embed-wrapper';
             const iframe = document.createElement('iframe');
-            iframe.src = `https://platform.twitter.com/embed/Tweet.html?id=${v.sourceId}&theme=dark`;
-            iframe.allow = 'autoplay; encrypted-media';
+            // Use twitframe for reliable Twitter/X embedding
+            iframe.src = `https://twitframe.com/show?url=${encodeURIComponent(v.url)}&theme=dark`;
+            iframe.allow = 'autoplay; encrypted-media; fullscreen';
             iframe.style.background = '#000';
+            iframe.style.borderRadius = '12px';
+            iframe.sandbox = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
             wrapper.appendChild(iframe);
+            item.appendChild(wrapper);
+
+          } else if (v.source === 'reddit') {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'embed-wrapper';
+            if (v.path) {
+              // Reddit post embed via redditmedia
+              const iframe = document.createElement('iframe');
+              iframe.src = `https://www.redditmedia.com/${v.path}/?ref_source=embed&ref=share&embed=true&theme=dark`;
+              iframe.allow = 'autoplay; encrypted-media; fullscreen';
+              iframe.style.background = '#1a1a1b';
+              iframe.style.borderRadius = '12px';
+              iframe.sandbox = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
+              wrapper.appendChild(iframe);
+            } else {
+              // v.redd.it or other reddit video URL — try direct video playback
+              const vid = document.createElement('video');
+              vid.src = v.url;
+              vid.loop = true;
+              vid.playsInline = true;
+              vid.muted = this.isMuted;
+              vid.preload = 'auto';
+              vid.crossOrigin = 'anonymous';
+              vid.setAttribute('playsinline', '');
+
+              // If direct playback fails, fall back to embed
+              vid.addEventListener('error', () => {
+                wrapper.innerHTML = '';
+                const iframe = document.createElement('iframe');
+                iframe.src = `https://www.redditmedia.com${new URL(v.url).pathname}?ref_source=embed&ref=share&embed=true&theme=dark`;
+                iframe.allow = 'autoplay; encrypted-media; fullscreen';
+                iframe.style.background = '#1a1a1b';
+                iframe.style.borderRadius = '12px';
+                iframe.sandbox = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
+                wrapper.appendChild(iframe);
+              });
+              wrapper.appendChild(vid);
+
+              const indicator = document.createElement('div');
+              indicator.className = 'play-indicator';
+              indicator.innerHTML = ICONS.pause;
+              item.appendChild(indicator);
+              item.addEventListener('click', (e) => {
+                if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
+                const v2 = item.querySelector('video');
+                if (!v2) return;
+                if (v2.paused) { v2.play(); indicator.innerHTML = ICONS.play; }
+                else { v2.pause(); indicator.innerHTML = ICONS.pause; }
+                indicator.classList.add('show');
+                setTimeout(() => indicator.classList.remove('show'), 600);
+              });
+            }
             item.appendChild(wrapper);
           }
 
@@ -1683,7 +1767,7 @@
         if (!v) return;
         this.dom.scrollCounter.textContent = `${idx + 1} / ${this.videos.length}`;
         this.dom.scrollInfoTitle.textContent = v.title;
-        const sourceLabels = { upload: 'Uploaded', youtube: 'YouTube', twitter: 'X / Twitter', direct: 'Direct Link' };
+        const sourceLabels = { upload: 'Uploaded', youtube: 'YouTube', twitter: 'X / Twitter', reddit: 'Reddit', direct: 'Direct Link' };
         this.dom.scrollInfoSource.textContent = sourceLabels[v.source] || v.source;
       }
 
