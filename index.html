@@ -643,6 +643,8 @@
       overflow-y: scroll;
       scroll-snap-type: y mandatory;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
     }
 
     .scroll-container::-webkit-scrollbar { display: none; }
@@ -900,22 +902,81 @@
     .toast.error { border-color: rgba(255, 68, 68, 0.2); color: #ff6b6b; }
     .toast.success { border-color: rgba(5, 217, 232, 0.2); color: var(--accent-2); }
 
+    /* ========== MOBILE / TOUCH ========== */
+
+    /* Prevent iOS zoom on input focus */
+    @supports (-webkit-touch-callout: none) {
+      input, textarea, select { font-size: 16px !important; }
+    }
+
+    /* Safe area padding for notch/dynamic island phones */
+    .top-bar {
+      padding-top: env(safe-area-inset-top, 0);
+      padding-left: max(28px, env(safe-area-inset-left, 0));
+      padding-right: max(28px, env(safe-area-inset-right, 0));
+    }
+
+    .scroll-info {
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .scroll-controls {
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .toast-container {
+      bottom: calc(24px + env(safe-area-inset-bottom, 0));
+    }
+
+    /* Touch-friendly minimum targets (48px per WCAG) */
+    @media (pointer: coarse) {
+      .btn { min-height: 48px; }
+      .btn-icon { width: 48px; height: 48px; }
+      .modal-close { width: 44px; height: 44px; }
+      .video-card-delete { width: 40px; height: 40px; opacity: 0.8; transform: scale(1); }
+      .scroll-ctrl-btn { width: 52px; height: 52px; }
+      .scroll-back { width: 48px; height: 48px; }
+    }
+
     /* ========== RESPONSIVE ========== */
     @media (max-width: 640px) {
-      .top-bar { padding: 0 16px; height: 64px; }
-      .library { padding: 80px 16px 32px; }
+      .top-bar { padding: 0 16px; padding-top: env(safe-area-inset-top, 0); height: 64px; }
+      .library { padding: 80px 16px 32px; padding-top: calc(80px + env(safe-area-inset-top, 0)); }
       .video-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
       .video-card-info { padding: 10px 12px; }
       .video-card-title { font-size: 0.75rem; }
-      .modal { width: 96vw; border-radius: var(--radius); }
+      .video-card-thumb { max-height: 280px; }
+      .modal { width: 96vw; max-height: 90vh; border-radius: var(--radius); }
       .modal-body { padding: 18px 20px 22px; }
-      .scroll-info { left: 16px; bottom: 28px; }
-      .scroll-controls { right: 14px; bottom: 24px; }
+      .scroll-info { left: 16px; bottom: calc(28px + env(safe-area-inset-bottom, 0)); max-width: calc(100% - 90px); }
+      .scroll-controls { right: 14px; bottom: calc(24px + env(safe-area-inset-bottom, 0)); }
+      .scroll-back { top: calc(14px + env(safe-area-inset-top, 0)); left: 14px; }
+      .scroll-counter { top: calc(20px + env(safe-area-inset-top, 0)); right: 16px; }
       .btn-scroll .btn-label { display: none; }
+      .empty-state { min-height: 50vh; }
+      .empty-icon { width: 96px; height: 96px; }
+      .empty-state h2 { font-size: 1.2rem; }
+      .empty-state p { font-size: 0.88rem; }
+      .logo { font-size: 1.15rem; }
+      .upload-area { padding: 30px 16px; }
+    }
+
+    @media (max-width: 380px) {
+      .video-grid { grid-template-columns: 1fr; gap: 12px; }
+      .video-card-thumb { max-height: 340px; }
+      .top-bar-actions .video-count { display: none; }
     }
 
     @media (min-width: 1200px) {
       .video-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+    }
+
+    /* Landscape phone — single row scroll-friendly grid */
+    @media (max-height: 500px) and (orientation: landscape) {
+      .library { padding-top: 72px; }
+      .video-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+      .video-card-thumb { max-height: 200px; }
+      .scroll-item video { object-fit: contain; }
     }
   </style>
 </head>
