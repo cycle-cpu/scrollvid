@@ -1525,26 +1525,63 @@
         let thumbUrl = null;
         let title = p.title || 'Linked Video';
 
-        // For Twitter/X: fetch actual video URL via fxtwitter API
+        // Twitter/X: use vxtwitter API (confirmed CORS) to get direct MP4
+        // Fallback: d.fxtwitter.com direct redirect URL
         if (p.type === 'twitter' && p.id) {
           this.toast('Fetching video from X...');
           try {
-            const resp = await fetch(`https://api.fxtwitter.com/status/${p.id}`);
+            const resp = await fetch(`https://api.vxtwitter.com/x/status/${p.id}`);
             const data = await resp.json();
-            if (data.tweet?.media?.videos?.length > 0) {
-              videoUrl = data.tweet.media.videos[0].url;
-              thumbUrl = data.tweet.media.videos[0].thumbnail_url || null;
-              title = data.tweet.text ? `@${p.user}: ${data.tweet.text.slice(0, 60)}` : `@${p.user}`;
-            } else if (data.tweet?.media?.all?.length > 0) {
-              // Some tweets store video differently
-              const vid = data.tweet.media.all.find(m => m.type === 'video' || m.type === 'gif');
+            if (data.mediaURLs && data.mediaURLs.length > 0) {
+              videoUrl = data.mediaURLs[0];
+            }
+            if (data.media_extended && data.media_extended.length > 0) {
+              const vid = data.media_extended.find(m => m.type === 'video' || m.type === 'gif');
               if (vid) {
                 videoUrl = vid.url;
                 thumbUrl = vid.thumbnail_url || null;
               }
             }
+            if (data.text) title = `@${p.user}: ${data.text.slice(0, 60)}`;
           } catch (e) {
-            console.warn('fxtwitter fetch failed, storing original URL:', e);
+            console.warn('vxtwitter failed, using d.fxtwitter direct URL');
+            // Fallback: d.fxtwitter.com returns 302 redirect to MP4
+            videoUrl = `https://d.fxtwitter.com/i/status/${p.id}.mp4`;
+          }
+        }
+
+        // Reddit: use AllOrigins CORS proxy to fetch Reddit JSON API
+        if (p.type === 'reddit' && p.url) {
+          this.toast('Fetching video from Reddit...');
+          try {
+            // Normalize URL to get the .json endpoint
+            let jsonUrl = p.url.replace(/\/$/, '');
+            // Strip query params and trailing slash, add .json
+            jsonUrl = jsonUrl.split('?')[0].replace(/\/$/, '') + '.json';
+            if (!jsonUrl.includes('reddit.com')) {
+              // v.redd.it URL — can't easily get JSON, store as-is
+            } else {
+              const proxied = `https://api.allorigins.win/get?url=${encodeURIComponent(jsonUrl)}`;
+              const resp = await fetch(proxied);
+              const wrapper = await resp.json();
+              const data = JSON.parse(wrapper.contents);
+              const post = data[0]?.data?.children?.[0]?.data;
+              if (post) {
+                title = post.title || 'Reddit Video';
+                if (post.secure_media?.reddit_video?.fallback_url) {
+                  videoUrl = post.secure_media.reddit_video.fallback_url;
+                } else if (post.media?.reddit_video?.fallback_url) {
+                  videoUrl = post.media.reddit_video.fallback_url;
+                } else if (post.url_overridden_by_dest && /\.(mp4|gif)/.test(post.url_overridden_by_dest)) {
+                  videoUrl = post.url_overridden_by_dest;
+                }
+                if (post.thumbnail && post.thumbnail.startsWith('http')) {
+                  thumbUrl = post.thumbnail;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('Reddit fetch failed:', e);
           }
         }
 
@@ -1554,7 +1591,7 @@
           source: p.type,
           sourceId: p.id || null,
           url: videoUrl,
-          originalUrl: p.url,
+          originalUrl: p.originalUrl || p.url,
           path: p.path || null,
           blob: null,
           thumbnail: thumbUrl,
@@ -1578,6 +1615,42 @@
       }
 
       // ---- SCROLL MODE ----
+
+      // Helper: create a native <video> element in a scroll item
+      _createNativeVideo(wrapper, item, src) {
+        if (wrapper) wrapper.innerHTML = '';
+        const vid = document.createElement('video');
+        vid.src = src;
+        vid.loop = true;
+        vid.playsInline = true;
+        vid.muted = this.isMuted;
+        vid.preload = 'auto';
+        // IMPORTANT: do NOT set crossOrigin — breaks Twitter CDN and Reddit CDN
+        vid.setAttribute('playsinline', '');
+        if (wrapper) {
+          vid.style.cssText = 'width:100%;height:100%;object-fit:contain';
+          wrapper.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center';
+          wrapper.appendChild(vid);
+        } else {
+          item.appendChild(vid);
+        }
+
+        const indicator = document.createElement('div');
+        indicator.className = 'play-indicator';
+        indicator.innerHTML = ICONS.pause;
+        item.appendChild(indicator);
+
+        item.addEventListener('click', (e) => {
+          if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
+          if (vid.paused) { vid.play(); indicator.innerHTML = ICONS.play; }
+          else { vid.pause(); indicator.innerHTML = ICONS.pause; }
+          indicator.classList.add('show');
+          setTimeout(() => indicator.classList.remove('show'), 600);
+        });
+
+        // Try to auto-play if visible
+        vid.play().catch(() => {});
+      }
 
       enterScrollMode(startIndex = 0) {
         if (this.videos.length === 0) return;
@@ -1619,34 +1692,44 @@
               setTimeout(() => indicator.classList.remove('show'), 600);
             });
 
-          } else if (v.source === 'direct' && v.url) {
-            const vid = document.createElement('video');
-            vid.src = v.url;
-            vid.loop = true;
-            vid.playsInline = true;
-            vid.muted = this.isMuted;
-            vid.preload = 'auto';
-            vid.crossOrigin = 'anonymous';
-            vid.setAttribute('playsinline', '');
-            item.appendChild(vid);
+          } else if (v.source === 'direct' || v.source === 'twitter' || v.source === 'reddit') {
+            // All these play as native <video> since we resolve the URL at add-time
+            // For Twitter: URL is from vxtwitter API or d.fxtwitter.com redirect
+            // For Reddit: URL is fallback_url from Reddit JSON API
+            // For Direct: URL is the raw link
+            let videoSrc = v.url;
 
-            const indicator = document.createElement('div');
-            indicator.className = 'play-indicator';
-            indicator.innerHTML = ICONS.pause;
-            item.appendChild(indicator);
+            // Twitter fallback: if URL wasn't resolved, use d.fxtwitter.com redirect
+            if (v.source === 'twitter' && v.sourceId && !v.url.includes('video.twimg.com') && !v.url.includes('.mp4')) {
+              videoSrc = `https://d.fxtwitter.com/i/status/${v.sourceId}.mp4`;
+            }
 
-            item.addEventListener('click', (e) => {
-              if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
-              if (vid.paused) {
-                vid.play();
-                indicator.innerHTML = ICONS.play;
-              } else {
-                vid.pause();
-                indicator.innerHTML = ICONS.pause;
-              }
-              indicator.classList.add('show');
-              setTimeout(() => indicator.classList.remove('show'), 600);
-            });
+            // Reddit fallback: if URL is still a reddit.com page, try to fetch on the fly
+            if (v.source === 'reddit' && v.url && v.url.includes('reddit.com') && !v.url.includes('v.redd.it')) {
+              const wrapper = document.createElement('div');
+              wrapper.className = 'embed-wrapper';
+              wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Loading Reddit video...</div>';
+              item.appendChild(wrapper);
+
+              const jsonUrl = v.url.replace(/\/$/, '').split('?')[0] + '.json';
+              fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(jsonUrl)}`)
+                .then(r => r.json())
+                .then(w => {
+                  const data = JSON.parse(w.contents);
+                  const post = data[0]?.data?.children?.[0]?.data;
+                  const fallback = post?.secure_media?.reddit_video?.fallback_url || post?.media?.reddit_video?.fallback_url;
+                  if (fallback) {
+                    this._createNativeVideo(wrapper, item, fallback);
+                  } else {
+                    wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">No video found in this post</div>';
+                  }
+                })
+                .catch(() => {
+                  wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Failed to load Reddit video</div>';
+                });
+            } else {
+              this._createNativeVideo(null, item, videoSrc);
+            }
 
           } else if (v.source === 'youtube' && v.sourceId) {
             const wrapper = document.createElement('div');
@@ -1656,133 +1739,6 @@
             iframe.allow = 'autoplay; encrypted-media';
             iframe.allowFullscreen = true;
             wrapper.appendChild(iframe);
-            item.appendChild(wrapper);
-
-          } else if (v.source === 'twitter') {
-            // If we have a direct video URL (from fxtwitter), play natively
-            const isDirectVideo = v.url && (v.url.includes('.mp4') || v.url.includes('video.twimg.com') || v.url.includes('fxtwitter'));
-            if (isDirectVideo) {
-              const vid = document.createElement('video');
-              vid.src = v.url;
-              vid.loop = true;
-              vid.playsInline = true;
-              vid.muted = this.isMuted;
-              vid.preload = 'auto';
-              vid.setAttribute('playsinline', '');
-              item.appendChild(vid);
-
-              const indicator = document.createElement('div');
-              indicator.className = 'play-indicator';
-              indicator.innerHTML = ICONS.pause;
-              item.appendChild(indicator);
-
-              item.addEventListener('click', (e) => {
-                if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
-                if (vid.paused) { vid.play(); indicator.innerHTML = ICONS.play; }
-                else { vid.pause(); indicator.innerHTML = ICONS.pause; }
-                indicator.classList.add('show');
-                setTimeout(() => indicator.classList.remove('show'), 600);
-              });
-            } else {
-              // Fallback: try to fetch video URL on the fly
-              const wrapper = document.createElement('div');
-              wrapper.className = 'embed-wrapper';
-              wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Loading video...</div>';
-              item.appendChild(wrapper);
-
-              if (v.sourceId) {
-                fetch(`https://api.fxtwitter.com/status/${v.sourceId}`)
-                  .then(r => r.json())
-                  .then(data => {
-                    let vidUrl = null;
-                    if (data.tweet?.media?.videos?.length > 0) vidUrl = data.tweet.media.videos[0].url;
-                    else { const m = data.tweet?.media?.all?.find(x => x.type === 'video' || x.type === 'gif'); if (m) vidUrl = m.url; }
-
-                    if (vidUrl) {
-                      wrapper.innerHTML = '';
-                      const vid = document.createElement('video');
-                      vid.src = vidUrl;
-                      vid.loop = true;
-                      vid.playsInline = true;
-                      vid.muted = this.isMuted;
-                      vid.preload = 'auto';
-                      vid.setAttribute('playsinline', '');
-                      vid.style.cssText = 'width:100%;height:100%;object-fit:contain';
-                      wrapper.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center';
-                      wrapper.appendChild(vid);
-                      vid.play().catch(() => {});
-
-                      const indicator = document.createElement('div');
-                      indicator.className = 'play-indicator';
-                      indicator.innerHTML = ICONS.pause;
-                      item.appendChild(indicator);
-                      item.addEventListener('click', (e) => {
-                        if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
-                        if (vid.paused) { vid.play(); indicator.innerHTML = ICONS.play; }
-                        else { vid.pause(); indicator.innerHTML = ICONS.pause; }
-                        indicator.classList.add('show');
-                        setTimeout(() => indicator.classList.remove('show'), 600);
-                      });
-                    } else {
-                      wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">No video found in this post</div>';
-                    }
-                  })
-                  .catch(() => {
-                    wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Failed to load video</div>';
-                  });
-              }
-            }
-
-          } else if (v.source === 'reddit') {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'embed-wrapper';
-            if (v.path) {
-              // Reddit post embed via redditmedia
-              const iframe = document.createElement('iframe');
-              iframe.src = `https://www.redditmedia.com/${v.path}/?ref_source=embed&ref=share&embed=true&theme=dark`;
-              iframe.allow = 'autoplay; encrypted-media; fullscreen';
-              iframe.style.background = '#1a1a1b';
-              iframe.style.borderRadius = '12px';
-              iframe.sandbox = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
-              wrapper.appendChild(iframe);
-            } else {
-              // v.redd.it or other reddit video URL — try direct video playback
-              const vid = document.createElement('video');
-              vid.src = v.url;
-              vid.loop = true;
-              vid.playsInline = true;
-              vid.muted = this.isMuted;
-              vid.preload = 'auto';
-              vid.crossOrigin = 'anonymous';
-              vid.setAttribute('playsinline', '');
-
-              // If direct playback fails, fall back to embed
-              vid.addEventListener('error', () => {
-                wrapper.innerHTML = '';
-                const iframe = document.createElement('iframe');
-                iframe.src = `https://www.redditmedia.com${new URL(v.url).pathname}?ref_source=embed&ref=share&embed=true&theme=dark`;
-                iframe.allow = 'autoplay; encrypted-media; fullscreen';
-                iframe.style.background = '#1a1a1b';
-                iframe.style.borderRadius = '12px';
-                iframe.sandbox = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
-                wrapper.appendChild(iframe);
-              });
-              wrapper.appendChild(vid);
-
-              const indicator = document.createElement('div');
-              indicator.className = 'play-indicator';
-              indicator.innerHTML = ICONS.pause;
-              item.appendChild(indicator);
-              item.addEventListener('click', (e) => {
-                if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
-                const v2 = item.querySelector('video');
-                if (!v2) return;
-                if (v2.paused) { v2.play(); indicator.innerHTML = ICONS.play; }
-                else { v2.pause(); indicator.innerHTML = ICONS.pause; }
-                indicator.classList.add('show');
-                setTimeout(() => indicator.classList.remove('show'), 600);
-              });
-            }
             item.appendChild(wrapper);
           }
 
