@@ -1525,63 +1525,76 @@
         let thumbUrl = null;
         let title = p.title || 'Linked Video';
 
-        // Twitter/X: use vxtwitter API (confirmed CORS) to get direct MP4
-        // Fallback: d.fxtwitter.com direct redirect URL
+        // Twitter/X: use fxtwitter API (CORS: *, actively maintained, returns direct video.twimg.com MP4s)
         if (p.type === 'twitter' && p.id) {
           this.toast('Fetching video from X...');
           try {
-            const resp = await fetch(`https://api.vxtwitter.com/x/status/${p.id}`);
+            const resp = await fetch(`https://api.fxtwitter.com/${p.user || 'i'}/status/${p.id}`);
+            if (!resp.ok) throw new Error(`fxtwitter ${resp.status}`);
             const data = await resp.json();
-            if (data.mediaURLs && data.mediaURLs.length > 0) {
-              videoUrl = data.mediaURLs[0];
-            }
-            if (data.media_extended && data.media_extended.length > 0) {
-              const vid = data.media_extended.find(m => m.type === 'video' || m.type === 'gif');
-              if (vid) {
-                videoUrl = vid.url;
-                thumbUrl = vid.thumbnail_url || null;
+            const tweet = data.tweet;
+            if (tweet) {
+              if (tweet.text) title = `@${p.user}: ${tweet.text.slice(0, 60)}`;
+              // Get video URL — check videos array first
+              if (tweet.media?.videos?.length > 0) {
+                const v = tweet.media.videos[0];
+                videoUrl = v.url; // highest quality MP4
+                thumbUrl = v.thumbnail_url || null;
+              }
+              // Also check media.all for gifs/alternate format
+              if (videoUrl === p.url && tweet.media?.all?.length > 0) {
+                const vid = tweet.media.all.find(m => m.type === 'video' || m.type === 'gif');
+                if (vid) {
+                  videoUrl = vid.url;
+                  thumbUrl = vid.thumbnail_url || null;
+                }
               }
             }
-            if (data.text) title = `@${p.user}: ${data.text.slice(0, 60)}`;
+            if (videoUrl === p.url) {
+              this.toast('No video found in this tweet', 'error');
+              return;
+            }
           } catch (e) {
-            console.warn('vxtwitter failed, using d.fxtwitter direct URL');
-            // Fallback: d.fxtwitter.com returns 302 redirect to MP4
-            videoUrl = `https://d.fxtwitter.com/i/status/${p.id}.mp4`;
+            console.warn('fxtwitter failed:', e);
+            this.toast('Could not fetch video from X', 'error');
+            return;
           }
         }
 
-        // Reddit: use AllOrigins CORS proxy to fetch Reddit JSON API
+        // Reddit: use Reddit's native .json API (has CORS: * — no proxy needed)
         if (p.type === 'reddit' && p.url) {
           this.toast('Fetching video from Reddit...');
           try {
-            // Normalize URL to get the .json endpoint
-            let jsonUrl = p.url.replace(/\/$/, '');
-            // Strip query params and trailing slash, add .json
-            jsonUrl = jsonUrl.split('?')[0].replace(/\/$/, '') + '.json';
-            if (!jsonUrl.includes('reddit.com')) {
-              // v.redd.it URL — can't easily get JSON, store as-is
-            } else {
-              const proxied = `https://api.allorigins.win/get?url=${encodeURIComponent(jsonUrl)}`;
-              const resp = await fetch(proxied);
-              const wrapper = await resp.json();
-              const data = JSON.parse(wrapper.contents);
+            let jsonUrl = p.url.split('?')[0].replace(/\/$/, '') + '.json';
+            // v.redd.it URLs don't have .json — skip fetch, use URL directly
+            if (jsonUrl.includes('reddit.com')) {
+              const resp = await fetch(jsonUrl);
+              if (!resp.ok) throw new Error(`Reddit ${resp.status}`);
+              const data = await resp.json();
               const post = data[0]?.data?.children?.[0]?.data;
               if (post) {
                 title = post.title || 'Reddit Video';
-                if (post.secure_media?.reddit_video?.fallback_url) {
-                  videoUrl = post.secure_media.reddit_video.fallback_url;
-                } else if (post.media?.reddit_video?.fallback_url) {
-                  videoUrl = post.media.reddit_video.fallback_url;
-                } else if (post.url_overridden_by_dest && /\.(mp4|gif)/.test(post.url_overridden_by_dest)) {
+                const rv = post.secure_media?.reddit_video || post.media?.reddit_video;
+                if (rv?.fallback_url) {
+                  videoUrl = rv.fallback_url;
+                } else if (rv?.hls_url) {
+                  videoUrl = rv.hls_url;
+                } else if (post.url_overridden_by_dest && /\.(mp4|gifv?|webm)/i.test(post.url_overridden_by_dest)) {
                   videoUrl = post.url_overridden_by_dest;
                 }
                 if (post.thumbnail && post.thumbnail.startsWith('http')) {
                   thumbUrl = post.thumbnail;
                 }
               }
+              if (videoUrl === p.url) {
+                this.toast('No video found in this Reddit post', 'error');
+                return;
+              }
             }
           } catch (e) {
             console.warn('Reddit fetch failed:', e);
+            this.toast('Could not fetch video from Reddit', 'error');
+            return;
           }
         }
 
@@ -1590,6 +1603,7 @@
           title,
           source: p.type,
           sourceId: p.id || null,
+          user: p.user || null,
           url: videoUrl,
           originalUrl: p.originalUrl || p.url,
           path: p.path || null,
@@ -1693,41 +1707,47 @@
             });
 
           } else if (v.source === 'direct' || v.source === 'twitter' || v.source === 'reddit') {
-            // All these play as native <video> since we resolve the URL at add-time
-            // For Twitter: URL is from vxtwitter API or d.fxtwitter.com redirect
-            // For Reddit: URL is fallback_url from Reddit JSON API
-            // For Direct: URL is the raw link
+            // All play as native <video> — URLs resolved at add-time
             let videoSrc = v.url;
+            const isResolved = videoSrc && (videoSrc.includes('video.twimg.com') || videoSrc.includes('v.redd.it') || videoSrc.includes('.mp4') || videoSrc.includes('.webm'));
 
-            // Twitter fallback: if URL wasn't resolved, use d.fxtwitter.com redirect
-            if (v.source === 'twitter' && v.sourceId && !v.url.includes('video.twimg.com') && !v.url.includes('.mp4')) {
-              videoSrc = `https://d.fxtwitter.com/i/status/${v.sourceId}.mp4`;
-            }
-
-            // Reddit fallback: if URL is still a reddit.com page, try to fetch on the fly
-            if (v.source === 'reddit' && v.url && v.url.includes('reddit.com') && !v.url.includes('v.redd.it')) {
+            if (isResolved) {
+              // URL was resolved at add-time, play directly
+              this._createNativeVideo(null, item, videoSrc);
+            } else if (v.source === 'twitter' && v.sourceId) {
+              // Fetch on the fly via fxtwitter
+              const wrapper = document.createElement('div');
+              wrapper.className = 'embed-wrapper';
+              wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Loading X video...</div>';
+              item.appendChild(wrapper);
+              fetch(`https://api.fxtwitter.com/${v.user || 'i'}/status/${v.sourceId}`)
+                .then(r => r.json())
+                .then(data => {
+                  const vidUrl = data.tweet?.media?.videos?.[0]?.url
+                    || data.tweet?.media?.all?.find(m => m.type === 'video' || m.type === 'gif')?.url;
+                  if (vidUrl) { this._createNativeVideo(wrapper, item, vidUrl); }
+                  else { wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">No video in this tweet</div>'; }
+                })
+                .catch(() => { wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Failed to load X video</div>'; });
+            } else if (v.source === 'reddit' && v.url?.includes('reddit.com')) {
+              // Fetch on the fly via Reddit .json (native CORS)
               const wrapper = document.createElement('div');
               wrapper.className = 'embed-wrapper';
               wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Loading Reddit video...</div>';
               item.appendChild(wrapper);
-
-              const jsonUrl = v.url.replace(/\/$/, '').split('?')[0] + '.json';
-              fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(jsonUrl)}`)
+              const jsonUrl = v.url.split('?')[0].replace(/\/$/, '') + '.json';
+              fetch(jsonUrl)
                 .then(r => r.json())
-                .then(w => {
-                  const data = JSON.parse(w.contents);
+                .then(data => {
                   const post = data[0]?.data?.children?.[0]?.data;
-                  const fallback = post?.secure_media?.reddit_video?.fallback_url || post?.media?.reddit_video?.fallback_url;
-                  if (fallback) {
-                    this._createNativeVideo(wrapper, item, fallback);
-                  } else {
-                    wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">No video found in this post</div>';
-                  }
+                  const rv = post?.secure_media?.reddit_video || post?.media?.reddit_video;
+                  const vidUrl = rv?.fallback_url || rv?.hls_url;
+                  if (vidUrl) { this._createNativeVideo(wrapper, item, vidUrl); }
+                  else { wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">No video in this post</div>'; }
                 })
-                .catch(() => {
-                  wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Failed to load Reddit video</div>';
-                });
+                .catch(() => { wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Failed to load Reddit video</div>'; });
             } else {
+              // Try playing whatever URL we have
               this._createNativeVideo(null, item, videoSrc);
             }
 
