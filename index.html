@@ -1521,15 +1521,43 @@
         const p = this.parsedLink;
         const id = `vid_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+        let videoUrl = p.url;
+        let thumbUrl = null;
+        let title = p.title || 'Linked Video';
+
+        // For Twitter/X: fetch actual video URL via fxtwitter API
+        if (p.type === 'twitter' && p.id) {
+          this.toast('Fetching video from X...');
+          try {
+            const resp = await fetch(`https://api.fxtwitter.com/status/${p.id}`);
+            const data = await resp.json();
+            if (data.tweet?.media?.videos?.length > 0) {
+              videoUrl = data.tweet.media.videos[0].url;
+              thumbUrl = data.tweet.media.videos[0].thumbnail_url || null;
+              title = data.tweet.text ? `@${p.user}: ${data.tweet.text.slice(0, 60)}` : `@${p.user}`;
+            } else if (data.tweet?.media?.all?.length > 0) {
+              // Some tweets store video differently
+              const vid = data.tweet.media.all.find(m => m.type === 'video' || m.type === 'gif');
+              if (vid) {
+                videoUrl = vid.url;
+                thumbUrl = vid.thumbnail_url || null;
+              }
+            }
+          } catch (e) {
+            console.warn('fxtwitter fetch failed, storing original URL:', e);
+          }
+        }
+
         const video = {
           id,
-          title: p.title || 'Linked Video',
+          title,
           source: p.type,
           sourceId: p.id || null,
-          url: p.url,
+          url: videoUrl,
+          originalUrl: p.url,
           path: p.path || null,
           blob: null,
-          thumbnail: null,
+          thumbnail: thumbUrl,
           createdAt: Date.now(),
         };
 
@@ -1631,17 +1659,79 @@
             item.appendChild(wrapper);
 
           } else if (v.source === 'twitter') {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'embed-wrapper';
-            const iframe = document.createElement('iframe');
-            // Use twitframe for reliable Twitter/X embedding
-            iframe.src = `https://twitframe.com/show?url=${encodeURIComponent(v.url)}&theme=dark`;
-            iframe.allow = 'autoplay; encrypted-media; fullscreen';
-            iframe.style.background = '#000';
-            iframe.style.borderRadius = '12px';
-            iframe.sandbox = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
-            wrapper.appendChild(iframe);
-            item.appendChild(wrapper);
+            // If we have a direct video URL (from fxtwitter), play natively
+            const isDirectVideo = v.url && (v.url.includes('.mp4') || v.url.includes('video.twimg.com') || v.url.includes('fxtwitter'));
+            if (isDirectVideo) {
+              const vid = document.createElement('video');
+              vid.src = v.url;
+              vid.loop = true;
+              vid.playsInline = true;
+              vid.muted = this.isMuted;
+              vid.preload = 'auto';
+              vid.setAttribute('playsinline', '');
+              item.appendChild(vid);
+
+              const indicator = document.createElement('div');
+              indicator.className = 'play-indicator';
+              indicator.innerHTML = ICONS.pause;
+              item.appendChild(indicator);
+
+              item.addEventListener('click', (e) => {
+                if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
+                if (vid.paused) { vid.play(); indicator.innerHTML = ICONS.play; }
+                else { vid.pause(); indicator.innerHTML = ICONS.pause; }
+                indicator.classList.add('show');
+                setTimeout(() => indicator.classList.remove('show'), 600);
+              });
+            } else {
+              // Fallback: try to fetch video URL on the fly
+              const wrapper = document.createElement('div');
+              wrapper.className = 'embed-wrapper';
+              wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Loading video...</div>';
+              item.appendChild(wrapper);
+
+              if (v.sourceId) {
+                fetch(`https://api.fxtwitter.com/status/${v.sourceId}`)
+                  .then(r => r.json())
+                  .then(data => {
+                    let vidUrl = null;
+                    if (data.tweet?.media?.videos?.length > 0) vidUrl = data.tweet.media.videos[0].url;
+                    else { const m = data.tweet?.media?.all?.find(x => x.type === 'video' || x.type === 'gif'); if (m) vidUrl = m.url; }
+
+                    if (vidUrl) {
+                      wrapper.innerHTML = '';
+                      const vid = document.createElement('video');
+                      vid.src = vidUrl;
+                      vid.loop = true;
+                      vid.playsInline = true;
+                      vid.muted = this.isMuted;
+                      vid.preload = 'auto';
+                      vid.setAttribute('playsinline', '');
+                      vid.style.cssText = 'width:100%;height:100%;object-fit:contain';
+                      wrapper.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center';
+                      wrapper.appendChild(vid);
+                      vid.play().catch(() => {});
+
+                      const indicator = document.createElement('div');
+                      indicator.className = 'play-indicator';
+                      indicator.innerHTML = ICONS.pause;
+                      item.appendChild(indicator);
+                      item.addEventListener('click', (e) => {
+                        if (e.target.closest('.scroll-ctrl-btn') || e.target.closest('.scroll-back')) return;
+                        if (vid.paused) { vid.play(); indicator.innerHTML = ICONS.play; }
+                        else { vid.pause(); indicator.innerHTML = ICONS.pause; }
+                        indicator.classList.add('show');
+                        setTimeout(() => indicator.classList.remove('show'), 600);
+                      });
+                    } else {
+                      wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">No video found in this post</div>';
+                    }
+                  })
+                  .catch(() => {
+                    wrapper.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Failed to load video</div>';
+                  });
+              }
+            }
 
           } else if (v.source === 'reddit') {
             const wrapper = document.createElement('div');
