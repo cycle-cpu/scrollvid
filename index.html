@@ -1128,6 +1128,13 @@
       <div class="logo">VOIDSCROLL</div>
       <div class="top-bar-actions">
         <span class="video-count" id="videoCount">0 VIDEOS</span>
+        <button class="btn btn-ghost btn-icon" id="exportBtn" title="Export feed" style="font-size:1rem">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-icon" id="importBtn" title="Import feed" style="font-size:1rem">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none">
         <button class="btn btn-ghost" id="addBtn" title="Add video">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add
@@ -1489,6 +1496,11 @@
         // Mute toggle
         d.muteBtn.addEventListener('click', () => this.toggleMute());
 
+        // Export / Import
+        this.$('#exportBtn').addEventListener('click', () => this.exportFeed());
+        this.$('#importBtn').addEventListener('click', () => this.$('#importFileInput').click());
+        this.$('#importFileInput').addEventListener('change', (e) => this.importFeed(e.target.files[0]));
+
         // Keyboard
         document.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') {
@@ -1590,6 +1602,67 @@
           await new Promise(r => setTimeout(r, 400));
           await this.addLink();
         }
+      }
+
+      // ---- EXPORT / IMPORT ----
+
+      exportFeed() {
+        // Export all linked videos (uploaded blobs can't be exported)
+        const exportable = this.videos
+          .filter(v => v.source !== 'upload')
+          .map(v => ({ title: v.title, source: v.source, sourceId: v.sourceId, user: v.user, url: v.url, originalUrl: v.originalUrl, path: v.path, thumbnail: typeof v.thumbnail === 'string' ? v.thumbnail : null, createdAt: v.createdAt }));
+
+        const uploadCount = this.videos.length - exportable.length;
+        const data = { version: 1, exported: new Date().toISOString(), count: exportable.length, videos: exportable };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `voidscroll-feed-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.toast(`Exported ${exportable.length} links${uploadCount ? ` (${uploadCount} uploaded videos skipped)` : ''}`, 'success');
+      }
+
+      async importFeed(file) {
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+          if (!data.videos || !Array.isArray(data.videos)) throw new Error('Invalid format');
+
+          let added = 0;
+          const existingUrls = new Set(this.videos.map(v => v.url));
+
+          for (const v of data.videos) {
+            if (existingUrls.has(v.url)) continue; // skip duplicates
+            const id = `vid_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const video = {
+              id,
+              title: v.title || 'Imported Video',
+              source: v.source || 'direct',
+              sourceId: v.sourceId || null,
+              user: v.user || null,
+              url: v.url,
+              originalUrl: v.originalUrl || v.url,
+              path: v.path || null,
+              blob: null,
+              thumbnail: v.thumbnail || null,
+              createdAt: v.createdAt || Date.now(),
+            };
+            await this.db.add(video);
+            this.videos.push(video);
+            existingUrls.add(v.url);
+            added++;
+          }
+
+          this.toast(`Imported ${added} video${added !== 1 ? 's' : ''}${data.videos.length - added > 0 ? ` (${data.videos.length - added} duplicates skipped)` : ''}`, 'success');
+          this.render();
+        } catch (e) {
+          console.warn('Import failed:', e);
+          this.toast('Invalid file — expected a VOIDSCROLL export', 'error');
+        }
+        this.$('#importFileInput').value = '';
       }
 
       // ---- MODAL ----
